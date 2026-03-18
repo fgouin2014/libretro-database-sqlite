@@ -1,10 +1,13 @@
-<img src="https://img.shields.io/badge/size-35%20MB-blue"></img>
-<img src="https://img.shields.io/badge/compressed%20size-14%20MB-blue"></img>
+<img src="https://img.shields.io/badge/size-105%20MB-blue"></img>
+<img src="https://img.shields.io/badge/compressed%20size-39.6%20MB-blue"></img>
+<img src="https://img.shields.io/badge/date-March%202026-green"></img>
 
-# SQLite Libretro DB
+# SQLite Libretro DB (Phoenix 2026 Update)
 
 In some cases, client applications may find a SQLite database easier to consume than the Libretro `.rdb` files. This project provides
 the same content* from the Libretro RetroArch database in a single SQLite database file.
+
+**Update March 2026**: This version has been rebuilt using the latest RDBs from the `feature/phoenix-core-manager` branch, including **141 platforms** and over **634,000 games**.
 
 \* *Some data is excluded, such as the filesize of the ROM, and all checksums except for MD5*
 

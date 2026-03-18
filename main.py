@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import argparse
 import json
 import os
@@ -127,19 +125,6 @@ class Converter:
         return output_file
 
     """
-    Ensure that the libretrodb_tool executable is on the PATH.
-    """
-    # def _ensure_libretrodb_tool(self):
-    #     proc = subprocess.Popen(["which", "libretrodb_tool"], stdout=PIPE, stderr=PIPE)
-    #     stdout, stderr = proc.communicate()
-    #     if proc.returncode != 0:
-    #         print("libretrodb_tool not found")
-    #         exit(1)
-    #     executable = stdout.decode('utf-8').strip()
-    #     print("Found libretrodb_tool executable: {}".format(executable))
-    #     return executable
-
-    """
     Ensure that the libretrodb_tool can be found
     """
     def _validate_libretrodb_tool(self, libretrodb_tool):
@@ -147,7 +132,7 @@ class Converter:
             self.logger.error("{} not found".format(libretrodb_tool))
             exit(1)
         return libretrodb_tool
-    
+
     """
     Reads the content of a SQL file as a string.
     """
@@ -162,13 +147,12 @@ class Converter:
     """
     def run(self):
         # Iterate over the .rdb files in the input directory and parse all data
-        for file in [f for f in os.listdir(self.rdb_dir) if os.path.isfile(os.path.join(self.rdb_dir, f))]:
-            if not file.endswith('.rdb'):
-                self.logger.info("Skipping non-RDB file: {}".format(file))
-                continue
-            self._parse_platform_file(os.path.join(self.rdb_dir, file))
-            # break # TODO: Remove this
+        rdb_files = [f for f in os.listdir(self.rdb_dir) if f.endswith('.rdb')]
+        self.logger.info("Found {} RDB files".format(len(rdb_files)))
         
+        for file in sorted(rdb_files):
+            self._parse_platform_file(os.path.join(self.rdb_dir, file))
+
         # Open the database connection
         connection = sqlite3.connect(self.output_file)
         cursor = connection.cursor()
@@ -191,20 +175,19 @@ class Converter:
         # Commit changes to the database
         connection.commit()
         connection.close()
-
-        # TODO: Create compressed file
+        self.logger.success("Built database: {}".format(self.output_file))
 
     """
     Parses a single platform .rdb file.
     """
     def _parse_platform_file(self, rdb_file):
-        self.logger.info("Parsing {}".format(rdb_file))
+        self.logger.info("Parsing {}".format(os.path.basename(rdb_file)))
 
         # Try to parse out the manufacturer and platfrom from the .rdb filename
         system_fullname = Path(rdb_file).stem
         manufacturer_name = system_fullname.split(" - ")[0] if system_fullname.find(" - ") != -1 else None
         platform_name = system_fullname[system_fullname.find(" - ") + len(" - "):] if system_fullname.find(" - ") != -1 else system_fullname
-        
+
         # Save the manufacturer name and generate an ID
         if manufacturer_name is not None and manufacturer_name not in self.manufacturers:
             self.manufacturers[manufacturer_name] = len(self.manufacturers) + 1
@@ -213,16 +196,17 @@ class Converter:
         manufacturer_id = self.manufacturers[manufacturer_name] if manufacturer_name is not None else None
         platform = Platform(platform_name, manufacturer_id)
         platform.id = len(self.platforms) + 1
-        self.platforms[platform_name] = platform
+        self.platforms[system_fullname] = platform
 
         # Parse the file line-by-line
         proc = subprocess.Popen([self.libretrodb_tool, rdb_file, "list"], stdout=PIPE, stderr=PIPE)
         stdout, stderr = proc.communicate()
-        # if proc.returncode != 0:
-            # XXX: For some reason this command has a return code of 1, but everything appears to run successfully
-            # print("Error while running the libretrodb_tool against .rdb file: {}".format(stderr.decode('utf-8')))
-            # return
-        for line in stdout.decode('utf-8').strip().split("\n"):
+        
+        output = stdout.decode('utf-8').strip()
+        if not output:
+            return
+            
+        for line in output.split("\n"):
             self._parse_line(line, platform.id)
 
     """
@@ -233,8 +217,7 @@ class Converter:
         try:
             json_obj = json.loads(json_str)
         except json.decoder.JSONDecodeError as e:
-            self.logger.error("Error while parsing JSON: {}".format(str(e)))
-            self.logger.error("Original JSON string: {}".format(json_str))
+            # self.logger.error("Error parsing JSON: {}".format(json_str[:50]))
             return
 
         # Extract the fields from the JSON
@@ -247,20 +230,16 @@ class Converter:
         franchise = self._get_json_value(json_obj, 'franchise')
         release_year = self._get_json_value(json_obj, 'releaseyear')
         release_month = self._get_json_value(json_obj, 'releasemonth')
-        size = self._get_json_value(json_obj, 'size')
         rom_name = self._get_json_value(json_obj, 'rom_name')
         region = self._get_json_value(json_obj, 'region')
         genre = self._get_json_value(json_obj, 'genre')
-        # description = self._get_json_value(json_obj, 'description') # This field in the dataset doesn't currently provide any added value
         full_name = self._get_json_value(json_obj, 'name')
-        
-        # Build the display name from the full name, but ignore all the trailing parenthesis-wrapped meta-tags
+
         if full_name is None:
             display_name = None
         else:
             display_name = full_name.split("(")[0].strip() if "(" in full_name else full_name
 
-        # Save potentially common references to developers, franchises, regions and genres, and assign an ID
         if developer is not None and developer not in self.developers:
             self.developers[developer] = len(self.developers) + 1
         if publisher is not None and publisher not in self.publishers:
@@ -281,130 +260,81 @@ class Converter:
         region_id = self.regions[region] if region is not None else None
         genre_id = self.genres[genre] if genre is not None else None
 
-        # Build the ROM and Game objects. Note that ROMs and games should be 1:1.
-        rom = ROM(serial, rom_name, md5)
         rom_id = len(self.roms) + 1
+        rom = ROM(serial, rom_name, md5)
         rom.id = rom_id
         self.roms[rom_id] = rom
 
         game = Game(display_name, full_name, serial, developer_id, publisher_id, rating_id, users, franchise_id, release_year, release_month, region_id, genre_id, platform_id)
-        if serial in self.games:
-            self.games[serial].join(game)
+        
+        key = (serial, full_name, platform_id)
+        if key in self.games:
+            self.games[key].join(game)
         else:
-            id = len(self.games) + 1
-            game.id = id
-            self.games[serial] = game
-    
-    """
-    Insert the manufacturers into the database.
-    """
+            game.id = len(self.games) + 1
+            self.games[key] = game
+
     def _insert_manufacturers(self, cursor):
-        for key,value in self.manufacturers.items():
-            (id, name) = (value, key)
-            cursor.execute(self._load_sql("./sql/insert_manufacturer.sql"), (id, name))
-        self.logger.success("Inserted {} manufacturers into database".format(len(self.manufacturers)))
-    
-    """
-    Insert the platforms into the database.
-    """
+        for key, value in self.manufacturers.items():
+            cursor.execute(self._load_sql("./sql/insert_manufacturer.sql"), (value, key))
+        self.logger.success("Inserted {} manufacturers".format(len(self.manufacturers)))
+
     def _insert_platforms(self, cursor):
-        for key,value in self.platforms.items():
+        for key, value in self.platforms.items():
             cursor.execute(self._load_sql("./sql/insert_platform.sql"), (value.id, value.name, value.manufacturer_id))
-        self.logger.success("Inserted {} platforms into database".format(len(self.platforms)))
+        self.logger.success("Inserted {} platforms".format(len(self.platforms)))
 
-    """
-    Insert the developers into the database.
-    """
     def _insert_developers(self, cursor):
-        for key,value in self.developers.items():
-            (id, name) = (value, key)
-            cursor.execute(self._load_sql("./sql/insert_developer.sql"), (id, name))
-        self.logger.success("Inserted {} developers into database".format(len(self.developers)))
+        for key, value in self.developers.items():
+            cursor.execute(self._load_sql("./sql/insert_developer.sql"), (value, key))
+        self.logger.success("Inserted {} developers".format(len(self.developers)))
 
-    """
-    Insert the publishers into the database.
-    """
     def _insert_publishers(self, cursor):
-        for key,value in self.publishers.items():
-            (id, name) = (value, key)
-            cursor.execute(self._load_sql("./sql/insert_publisher.sql"), (id, name))
-        self.logger.success("Inserted {} publishers into database".format(len(self.publishers)))
-    
-    """
-    Insert the ratings into the database.
-    """
+        for key, value in self.publishers.items():
+            cursor.execute(self._load_sql("./sql/insert_publisher.sql"), (value, key))
+        self.logger.success("Inserted {} publishers".format(len(self.publishers)))
+
     def _insert_ratings(self, cursor):
-        for key,value in self.ratings.items():
-            (id, name) = (value, key)
-            cursor.execute(self._load_sql("./sql/insert_rating.sql"), (id, name))
-        self.logger.success("Inserted {} ratings into database".format(len(self.ratings)))
+        for key, value in self.ratings.items():
+            cursor.execute(self._load_sql("./sql/insert_rating.sql"), (value, key))
+        self.logger.success("Inserted {} ratings".format(len(self.ratings)))
 
-    """
-    Insert the franchises into the database.
-    """
     def _insert_franchises(self, cursor):
-        for key,value in self.franchises.items():
-            (id, name) = (value, key)
-            cursor.execute(self._load_sql("./sql/insert_franchise.sql"), (id, name))
-        self.logger.success("Inserted {} franchises into database".format(len(self.franchises)))
+        for key, value in self.franchises.items():
+            cursor.execute(self._load_sql("./sql/insert_franchise.sql"), (value, key))
+        self.logger.success("Inserted {} franchises".format(len(self.franchises)))
 
-    """
-    Insert the regions into the database.
-    """
     def _insert_regions(self, cursor):
-        for key,value in self.regions.items():
-            (id, name) = (value, key)
-            cursor.execute(self._load_sql("./sql/insert_region.sql"), (id, name))
-        self.logger.success("Inserted {} regions into database".format(len(self.regions)))
+        for key, value in self.regions.items():
+            cursor.execute(self._load_sql("./sql/insert_region.sql"), (value, key))
+        self.logger.success("Inserted {} regions".format(len(self.regions)))
 
-    """
-    Insert the genres into the database.
-    """
     def _insert_genres(self, cursor):
-        for key,value in self.genres.items():
-            (id, name) = (value, key)
-            cursor.execute(self._load_sql("./sql/insert_genre.sql"), (id, name))
-        self.logger.success("Inserted {} genres into database".format(len(self.genres)))
+        for key, value in self.genres.items():
+            cursor.execute(self._load_sql("./sql/insert_genre.sql"), (value, key))
+        self.logger.success("Inserted {} genres".format(len(self.genres)))
 
-    """
-    Insert the games into the database.
-    """
     def _insert_games(self, cursor):
-        for key,value in self.games.items():
-            game = value
+        for key, game in self.games.items():
             cursor.execute(self._load_sql("./sql/insert_game.sql"), (
-                game.id, 
-                game.serial,
-                game.developer_id,
-                game.publisher_id,
-                game.rating_id,
-                game.users,
-                game.franchise_id,
-                game.release_year,
-                game.release_month,
-                game.region_id,
-                game.genre_id,
-                game.display_name,
-                game.full_name,
-                game.platform_id))
-        self.logger.success("Inserted {} games into database".format(len(self.games)))
+                game.id, game.serial, game.developer_id, game.publisher_id,
+                game.rating_id, game.users, game.franchise_id, game.release_year,
+                game.release_month, game.region_id, game.genre_id,
+                game.display_name, game.full_name, game.platform_id))
+        self.logger.success("Inserted {} games".format(len(self.games)))
 
-    """
-    Insert the ROMs into the database.
-    """
     def _insert_roms(self, cursor):
-        for key,value in self.roms.items():
-            rom = value
+        for key, rom in self.roms.items():
             cursor.execute(self._load_sql("./sql/insert_rom.sql"), (rom.id, rom.serial, rom.name, rom.md5))
-        self.logger.success("Inserted {} ROMs into database".format(len(self.roms)))
+        self.logger.success("Inserted {} ROMs".format(len(self.roms)))
 
     def _get_json_value(self, json_obj, key):
         return json_obj[key] if key in json_obj else None
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--rdb-dir', type=str, nargs=1, default=['./rdb'])
-    parser.add_argument('--output', type=str, nargs=1, default=['libretrodb.sqlite'])
-    parser.add_argument('--libretrodb-tool', type=str, nargs=1, default=['libretrodb_tool'])
+    parser.add_argument('--rdb-dir', type=str, required=True)
+    parser.add_argument('--output', type=str, required=True)
+    parser.add_argument('--libretrodb-tool', type=str, required=True)
     args = parser.parse_args()
-    Converter(args.rdb_dir[0], args.output[0], args.libretrodb_tool[0]).run()
+    Converter(args.rdb_dir, args.output, args.libretrodb_tool).run()
